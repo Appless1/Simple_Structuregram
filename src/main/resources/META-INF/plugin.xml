@@ -1,7 +1,8 @@
 <idea-plugin>
-    <id>com.example.simple-structuregram</id>
+    <!-- CHANGED: 'com.example' is forbidden, so we use a different ID -->
+    <id>com.structuregram.simple.id</id>
     <name>Simple Structuregram</name>
-    <vendor email="user@example.com" url="https://www.example.com">Example Vendor</vendor>
+    <vendor email="user@localhost" url="https://www.localhost.com">Local User</vendor>
 
     <description><![CDATA[
     A simple plugin to generate Nassi-Shneiderman diagrams from Java methods.
@@ -19,12 +20,11 @@
 
     <actions>
         <!-- Registers the action in the Editor Popup Menu (Right Click) -->
-        <action id="com.example.nsd.GenerateStructuregramAction"
+        <action id="com.structuregram.simple.GenerateStructuregramAction"
                 class="GenerateStructuregramAction"
                 text="Generate Structuregram"
                 description="Generates a Nassi-Shneiderman diagram for the selected method">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
-        <action id="GenerateStructuregramAction" class="GenerateStructuregramAction" text="Generate"/>
     </actions>
 </idea-plugin>

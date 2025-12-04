@@ -2,7 +2,8 @@
 import com.intellij.psi.*;
 import javax.swing.*;
 import java.awt.*;
-import java.awt.geom.Path2D;
+import java.awt.event.*;
+import java.awt.geom.AffineTransform;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -12,7 +13,9 @@ import java.util.List;
  * - Uses classic symbols like assignment (:=).
  * - Simplifies complex statements (System.out.println -> Print).
  * - Implements text wrapping to ensure content fits.
- * - Supports Switch/Case diagrams with Fan-out style.
+ * - HANDLES SWITCH STATEMENTS using modern, non-deprecated APIs.
+ * - Support for Zooming via Ctrl + MouseWheel.
+ * - NEW: Support for Panning via Middle Mouse Button.
  */
 public class StructuregramComponent extends JPanel {
 
@@ -24,10 +27,78 @@ public class StructuregramComponent extends JPanel {
     private static final Font FONT_BOLD = new Font("SansSerif", Font.BOLD, 12);
     private static final Font FONT_PLAIN = new Font("SansSerif", Font.PLAIN, 12);
 
+    // Zooming state
+    private double scaleFactor = 1.0;
+    private static final double MIN_SCALE = 0.2;
+    private static final double MAX_SCALE = 5.0;
+
+    // Panning state
+    private double translateX = 0;
+    private double translateY = 0;
+    private Point lastDragPoint;
+
     public StructuregramComponent(PsiMethod method) {
         this.rootBlock = parseMethod(method);
         setBackground(Color.WHITE);
-        setToolTipText("Structuregram for " + method.getName());
+        setToolTipText("Ctrl+Scroll to Zoom, Middle-Click to Pan. Structuregram for " + method.getName());
+        setFocusable(true); // Ensure we can receive inputs if needed
+
+        // Mouse Adapter for Panning (Middle Click) and Zooming
+        MouseAdapter mouseAdapter = new MouseAdapter() {
+            @Override
+            public void mouseWheelMoved(MouseWheelEvent e) {
+                if (e.isControlDown()) {
+                    if (e.getWheelRotation() < 0) {
+                        scaleFactor *= 1.1; // Zoom In
+                    } else {
+                        scaleFactor /= 1.1; // Zoom Out
+                    }
+                    // Clamp scale
+                    scaleFactor = Math.max(MIN_SCALE, Math.min(scaleFactor, MAX_SCALE));
+
+                    revalidate();
+                    repaint();
+                    e.consume();
+                } else {
+                    // Propagate to parent scroll pane if control is not held
+                    getParent().dispatchEvent(e);
+                }
+            }
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isMiddleMouseButton(e)) {
+                    lastDragPoint = e.getPoint();
+                    setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (SwingUtilities.isMiddleMouseButton(e)) {
+                    lastDragPoint = null;
+                    setCursor(Cursor.getDefaultCursor());
+                }
+            }
+
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (lastDragPoint != null && SwingUtilities.isMiddleMouseButton(e)) {
+                    double dx = e.getX() - lastDragPoint.getX();
+                    double dy = e.getY() - lastDragPoint.getY();
+
+                    translateX += dx;
+                    translateY += dy;
+
+                    lastDragPoint = e.getPoint();
+                    repaint();
+                }
+            }
+        };
+
+        addMouseWheelListener(mouseAdapter);
+        addMouseListener(mouseAdapter);
+        addMouseMotionListener(mouseAdapter);
     }
 
     // --- PARSING LOGIC ---
@@ -62,43 +133,46 @@ public class StructuregramComponent extends JPanel {
             PsiSwitchStatement switchStmt = (PsiSwitchStatement) stmt;
             String expression = switchStmt.getExpression() != null ? switchStmt.getExpression().getText() : "?";
 
-            SwitchBlock switchBlock = new SwitchBlock(naturalize(expression));
-
+            List<SwitchBlock.CaseInfo> cases = new ArrayList<>();
             PsiCodeBlock body = switchStmt.getBody();
+
             if (body != null) {
-                ContainerBlock currentBody = null;
-                String currentLabel = "";
+                String currentLabel = null;
+                ContainerBlock currentContainer = null;
 
                 for (PsiStatement s : body.getStatements()) {
                     if (s instanceof PsiSwitchLabelStatement) {
-                        if (currentBody != null) {
-                            switchBlock.addCase(currentLabel, currentBody);
+                        // Finish previous case
+                        if (currentLabel != null && currentContainer != null) {
+                            cases.add(new SwitchBlock.CaseInfo(currentLabel, currentContainer));
                         }
+
+                        // Start new case
+                        currentContainer = new ContainerBlock();
                         PsiSwitchLabelStatement label = (PsiSwitchLabelStatement) s;
                         if (label.isDefaultCase()) {
                             currentLabel = "Default";
                         } else {
-                            PsiExpressionList values = label.getCaseValues();
-                            if (values != null) {
-                                currentLabel = naturalize(values.getText());
-                            } else {
-                                currentLabel = "?";
-                            }
+                            PsiCaseLabelElementList list = label.getCaseLabelElementList();
+                            currentLabel = (list != null) ? naturalize(list.getText()) : "Case";
                         }
-                        currentBody = new ContainerBlock();
                     } else {
-                        if (currentBody != null) {
-                            if (!(s instanceof PsiBreakStatement)) {
-                                currentBody.add(parseStatement(s));
-                            }
+                        // Add statement to current case
+                        if (currentContainer != null) {
+                            currentContainer.add(parseStatement(s));
+                        } else if (currentLabel == null) {
+                            currentLabel = "Start";
+                            currentContainer = new ContainerBlock();
+                            currentContainer.add(parseStatement(s));
                         }
                     }
                 }
-                if (currentBody != null) {
-                    switchBlock.addCase(currentLabel, currentBody);
+                // Add the last case
+                if (currentLabel != null && currentContainer != null) {
+                    cases.add(new SwitchBlock.CaseInfo(currentLabel, currentContainer));
                 }
             }
-            return switchBlock;
+            return new SwitchBlock(naturalize(expression), cases);
         }
         else if (stmt instanceof PsiWhileStatement) {
             PsiWhileStatement loop = (PsiWhileStatement) stmt;
@@ -149,7 +223,6 @@ public class StructuregramComponent extends JPanel {
                     PsiLocalVariable var = (PsiLocalVariable) el;
                     sb.append(var.getName());
                     if (var.getInitializer() != null) {
-                        // Use := for declaration assignment
                         sb.append(" := ").append(naturalize(var.getInitializer().getText()));
                     }
                 }
@@ -169,7 +242,6 @@ public class StructuregramComponent extends JPanel {
         return parseStatement(body);
     }
 
-    // --- NATURAL LANGUAGE PROCESSOR ---
     private String naturalize(String code) {
         if (code == null) return "";
         String text = code.trim();
@@ -189,30 +261,16 @@ public class StructuregramComponent extends JPanel {
         text = text.replace("!", "not ");
         text = text.replace("this.", "");
 
-        // Assignments: Use :=
-        // Ensure we don't accidentally replace ==, >=, <= which we want to keep or convert to symbols
-        // First protect inequalities if needed, or just be careful with replacement
-
-        // Convert strict equalities to symbols if desired, or keep as is.
-        // The user said "if condition could stay as equals...".
-        // But for assignment they want :=
-
-        // If the string has " = " and NOT " == ", replace with :=
-        // We can do a regex lookaround or simpler checks
         if (text.contains("=") && !text.contains("==") && !text.contains(">=") && !text.contains("<=") && !text.contains("!=")) {
             text = text.replace("=", ":=");
         }
-        // Handle " = " specifically to be safe
         text = text.replace(" = ", " := ");
 
-        // Remove types
-        text = text.replaceAll("\\bint\\b", "");
-        text = text.replaceAll("\\bString\\b", "");
-        text = text.replaceAll("\\bboolean\\b", "");
-        text = text.replaceAll("\\bdouble\\b", "");
-        text = text.replaceAll("\\bfloat\\b", "");
-        text = text.replaceAll("\\bvar\\b", "");
-        text = text.replaceAll("\\bchar\\b", "");
+        // Remove types for simpler reading
+        text = text.replaceAll("\\bint\\b", "").replaceAll("\\bString\\b", "")
+                .replaceAll("\\bboolean\\b", "").replaceAll("\\bdouble\\b", "")
+                .replaceAll("\\bfloat\\b", "").replaceAll("\\bvar\\b", "")
+                .replaceAll("\\bchar\\b", "");
 
         return text.replaceAll("\\s+", " ").trim();
     }
@@ -244,19 +302,40 @@ public class StructuregramComponent extends JPanel {
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g;
+
+        // Setup rendering
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
         g2.setStroke(new BasicStroke(1.2f));
 
         if (rootBlock != null) {
-            Dimension dim = rootBlock.calculateSize(g2);
-            setPreferredSize(new Dimension(dim.width + PADDING * 2, dim.height + PADDING * 2));
-            revalidate();
+            // 1. Calculate Logical (Unscaled) Size first
+            Dimension logicalDim = rootBlock.calculateSize(g2);
 
-            g2.translate(PADDING, PADDING);
+            // 2. Update Preferred Size based on Scale
+            int scaledW = (int) ((logicalDim.width + PADDING * 2) * scaleFactor);
+            int scaledH = (int) ((logicalDim.height + PADDING * 2) * scaleFactor);
+
+            Dimension currentPref = getPreferredSize();
+            if (currentPref.width != scaledW || currentPref.height != scaledH) {
+                setPreferredSize(new Dimension(scaledW, scaledH));
+                revalidate();
+            }
+
+            // 3. Apply Transformations (Pan then Zoom)
+            AffineTransform oldTransform = g2.getTransform();
+
+            g2.translate(translateX, translateY); // Apply Pan
+            g2.scale(scaleFactor, scaleFactor);   // Apply Zoom
+            g2.translate(PADDING, PADDING);       // Apply Base Padding
+
+            // 4. Draw
             g2.setColor(Color.BLACK);
-            g2.drawRect(0, 0, dim.width, dim.height);
-            rootBlock.draw(g2, 0, 0, dim.width);
+            g2.drawRect(0, 0, logicalDim.width, logicalDim.height);
+            rootBlock.draw(g2, 0, 0, logicalDim.width);
+
+            // 5. Restore Transform
+            g2.setTransform(oldTransform);
         }
     }
 
@@ -389,129 +468,6 @@ public class StructuregramComponent extends JPanel {
         }
     }
 
-    static class SwitchBlock implements NsdBlock {
-        String expression;
-        List<String> labels = new ArrayList<>();
-        List<NsdBlock> bodies = new ArrayList<>();
-
-        SwitchBlock(String expression) {
-            this.expression = expression;
-        }
-
-        void addCase(String label, NsdBlock body) {
-            labels.add(label);
-            bodies.add(body);
-        }
-
-        @Override
-        public Dimension calculateSize(Graphics2D g) {
-            int totalWidth = 0;
-            int maxBodyHeight = 0;
-            for (NsdBlock b : bodies) {
-                Dimension d = b.calculateSize(g);
-                totalWidth += d.width;
-                maxBodyHeight = Math.max(maxBodyHeight, d.height);
-            }
-            int headerH = (int)(LINE_HEIGHT * 2.5);
-            return new Dimension(Math.max(totalWidth, MIN_BLOCK_WIDTH), maxBodyHeight + headerH);
-        }
-
-        @Override
-        public int draw(Graphics2D g, int x, int y, int width) {
-            if (bodies.isEmpty()) return 0;
-
-            int headerH = (int)(LINE_HEIGHT * 2.5);
-            int maxBodyH = 0;
-            int[] widths = new int[bodies.size()];
-            int totalCalcWidth = 0;
-
-            // 1. Calculate dimensions
-            for (int i = 0; i < bodies.size(); i++) {
-                Dimension d = bodies.get(i).calculateSize(g);
-                widths[i] = d.width;
-                totalCalcWidth += d.width;
-                maxBodyH = Math.max(maxBodyH, d.height);
-            }
-
-            g.setColor(Color.BLACK);
-            // Outer box
-            g.drawRect(x, y, width, headerH + maxBodyH);
-            // Header line
-            g.drawLine(x, y + headerH, x + width, y + headerH);
-
-            // 2. Draw Header Text
-            g.setFont(FONT_BOLD);
-            drawMultilineString(g, wrapText(g, expression, width/2, FONT_BOLD), x, y, width, headerH - 10);
-
-            // 3. Draw Columns and Fan Lines
-            int currentX = x;
-            double scale = (double)width / totalCalcWidth;
-            int bottomY = y + headerH;
-            int midX = x + (width / 2);
-            int midY = y + headerH; // Point where lines converge?
-            // Actually, in the fan style, lines go from (MidX, BottomY of Header) to (Col Separators at Top)?
-            // No, usually it's from (MidX, BottomY of Header) UP to corners, creating the "Variable" triangle.
-
-            // Let's implement the style from the image:
-            // A central triangle for the expression.
-            // Lines radiate from Bottom-Center of the header area to the top-corners of the columns.
-
-            g.setFont(FONT_PLAIN);
-
-            for (int i = 0; i < bodies.size(); i++) {
-                int colWidth = (int)(widths[i] * scale);
-                if (i == bodies.size() - 1) colWidth = (x + width) - currentX;
-
-                // Draw Body
-                bodies.get(i).draw(g, currentX, bottomY, colWidth);
-
-                // Draw vertical separator between columns
-                if (i > 0) {
-                    g.drawLine(currentX, bottomY, currentX, bottomY + maxBodyH);
-
-                    // Draw Fan Line: From center of header bottom to the top of this separator
-                    g.drawLine(midX, bottomY, currentX, y);
-                    // Wait, strictly speaking, the fan lines usually originate from the bottom center of the header
-                    // and go to the top of the header.
-                    // Actually, simpler visual:
-                    // Draw line from (MidX, BottomY) to (CurrentX, Y) is nice, but might cross text.
-                    // Let's draw from (MidX, BottomY) to (CurrentX, BottomY) is just the separator line top.
-                    // The diagonal needs to go from (MidX, BottomY) to somewhere on the top edge?
-                    // No, looking at the diagram, the "Triangle" for variable is inverted.
-                    // Top edge is flat. Sides go down to the center point.
-                    // So we draw line from (x, y) to (MidX, BottomY) ? No that cuts the first block.
-
-                    // Let's use the "Radiating from Bottom Center" style.
-                    // Center point: (x + width/2, y + headerH).
-                    // Rays go to: (currentX, y) (Top edge of header).
-                    g.drawLine(x + width/2, y + headerH, currentX, y);
-                }
-
-                // Draw Label in the wedge
-                // Position: roughly in the middle of the wedge
-                // Wedge center X = (currentX + colWidth/2 + x + width/2) / 2 ... approx
-                int labelX = currentX + 5;
-                int labelY = y + 15;
-                // Optimization: Place label closer to the top-left of the column section
-                g.drawString(labels.get(i), labelX, labelY);
-
-                currentX += colWidth;
-            }
-
-            // Draw the two main diagonals for the outer triangle if needed,
-            // but the loop above handles the internal rays.
-            // We need the first and last diagonal if we want a fully enclosed triangle for the expression?
-            // The loop draws separators.
-            // Let's draw the main V for the expression:
-            // Line from Top-Left to Bottom-Center
-            g.drawLine(x, y, x + width/2, y + headerH);
-            // Line from Top-Right to Bottom-Center
-            g.drawLine(x + width, y, x + width/2, y + headerH);
-
-            return headerH + maxBodyH;
-        }
-    }
-
     static class LoopBlock implements NsdBlock {
         String condition;
         NsdBlock body;
@@ -535,18 +491,96 @@ public class StructuregramComponent extends JPanel {
             int totalHeight = bodyHeight + headerHeight;
 
             g.setColor(Color.BLACK);
-            // Header box
             g.drawRect(x, y, width, headerHeight);
             g.setFont(FONT_BOLD);
             drawMultilineString(g, wrapText(g, condition, width - 10, FONT_BOLD), x, y, width, headerHeight);
 
-            // Side bar (L shape)
             g.drawRect(x, y + headerHeight, barWidth, bodyHeight);
-
-            // Body
             body.draw(g, x + barWidth, y + headerHeight, width - barWidth);
 
             return totalHeight;
+        }
+    }
+
+    static class SwitchBlock implements NsdBlock {
+        static class CaseInfo {
+            String label;
+            NsdBlock block;
+            CaseInfo(String label, NsdBlock block) { this.label = label; this.block = block; }
+        }
+
+        String expression;
+        List<CaseInfo> cases;
+
+        SwitchBlock(String expression, List<CaseInfo> cases) {
+            this.expression = expression;
+            this.cases = cases;
+        }
+
+        @Override
+        public Dimension calculateSize(Graphics2D g) {
+            int totalW = 0;
+            int maxH = 0;
+            for (CaseInfo c : cases) {
+                Dimension d = c.block.calculateSize(g);
+                totalW += d.width;
+                maxH = Math.max(maxH, d.height);
+            }
+            int headerH = (int)(LINE_HEIGHT * 2.5);
+            return new Dimension(Math.max(totalW, MIN_BLOCK_WIDTH), maxH + headerH);
+        }
+
+        @Override
+        public int draw(Graphics2D g, int x, int y, int width) {
+            int headerH = (int)(LINE_HEIGHT * 2.5);
+            int contentTop = y + headerH;
+
+            // Draw Header (Switch Condition)
+            g.setColor(Color.BLACK);
+            g.drawRect(x, y, width, headerH);
+            g.setFont(FONT_BOLD);
+            drawMultilineString(g, wrapText(g, "Switch: " + expression, width, FONT_BOLD), x, y + 5, width, headerH/2);
+
+            if (cases.isEmpty()) return headerH;
+
+            int currentX = x;
+            int remainingWidth = width;
+            int totalRequiredWidth = 0;
+            for(CaseInfo c : cases) totalRequiredWidth += c.block.calculateSize(g).width;
+
+            int maxContentH = 0;
+            for(CaseInfo c : cases) maxContentH = Math.max(maxContentH, c.block.calculateSize(g).height);
+
+            // Draw each case column
+            for (int i = 0; i < cases.size(); i++) {
+                CaseInfo c = cases.get(i);
+
+                // Proportional width allocation
+                int colWidth;
+                if (i == cases.size() - 1) {
+                    colWidth = remainingWidth; // Last one takes remainder to avoid gaps
+                } else {
+                    double ratio = (double) c.block.calculateSize(g).width / totalRequiredWidth;
+                    colWidth = (int) (width * ratio);
+                    if (colWidth < 50) colWidth = 50; // Min width safety
+                }
+                remainingWidth -= colWidth;
+
+                // Draw Label Area (Diagonal split is complex, using sub-header)
+                g.drawRect(currentX, contentTop - (headerH/2), colWidth, headerH/2);
+                g.setFont(FONT_PLAIN);
+                g.drawString(c.label, currentX + 5, contentTop - 5);
+
+                // Draw Case Block
+                c.block.draw(g, currentX, contentTop, colWidth);
+
+                // Draw outline for case column to ensure full height matching
+                g.drawRect(currentX, contentTop, colWidth, maxContentH);
+
+                currentX += colWidth;
+            }
+
+            return headerH + maxContentH;
         }
     }
 }
