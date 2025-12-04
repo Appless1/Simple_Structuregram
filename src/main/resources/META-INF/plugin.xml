@@ -1,0 +1,30 @@
+<idea-plugin>
+    <id>com.example.simple-structuregram</id>
+    <name>Simple Structuregram</name>
+    <vendor email="user@example.com" url="https://www.example.com">Example Vendor</vendor>
+
+    <description><![CDATA[
+    A simple plugin to generate Nassi-Shneiderman diagrams from Java methods.
+    <br>
+    Usage: Highlight a method name or body, Right Click -> Generate Structuregram.
+    ]]></description>
+
+    <!-- We depend on the Java module to parse Java code -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Add any extensions here -->
+    </extensions>
+
+    <actions>
+        <!-- Registers the action in the Editor Popup Menu (Right Click) -->
+        <action id="com.example.nsd.GenerateStructuregramAction"
+                class="GenerateStructuregramAction"
+                text="Generate Structuregram"
+                description="Generates a Nassi-Shneiderman diagram for the selected method">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+        <action id="GenerateStructuregramAction" class="GenerateStructuregramAction" text="Generate"/>
+    </actions>
+</idea-plugin>
