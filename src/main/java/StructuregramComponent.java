@@ -1,4 +1,3 @@
-
 import com.intellij.psi.*;
 import javax.swing.*;
 import java.awt.*;
@@ -7,16 +6,7 @@ import java.awt.geom.AffineTransform;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Updated Renderer with "Natural Language" processing.
- * - Converts Java syntax (==, &&, ;) into readable text (=, and).
- * - Uses classic symbols like assignment (:=).
- * - Simplifies complex statements (System.out.println -> Print).
- * - Implements text wrapping to ensure content fits.
- * - HANDLES SWITCH STATEMENTS using modern, non-deprecated APIs.
- * - Support for Zooming via Ctrl + MouseWheel.
- * - NEW: Support for Panning via Middle Mouse Button.
- */
+
 public class StructuregramComponent extends JPanel {
 
     private final NsdBlock rootBlock;
@@ -40,7 +30,6 @@ public class StructuregramComponent extends JPanel {
     public StructuregramComponent(PsiMethod method) {
         this.rootBlock = parseMethod(method);
         setBackground(Color.WHITE);
-        setToolTipText("Ctrl+Scroll to Zoom, Middle-Click to Pan. Structuregram for " + method.getName());
         setFocusable(true); // Ensure we can receive inputs if needed
 
         // Mouse Adapter for Panning (Middle Click) and Zooming
@@ -101,7 +90,6 @@ public class StructuregramComponent extends JPanel {
         addMouseMotionListener(mouseAdapter);
     }
 
-    // --- PARSING LOGIC ---
 
     private NsdBlock parseMethod(PsiMethod method) {
         PsiCodeBlock body = method.getBody();
@@ -296,7 +284,6 @@ public class StructuregramComponent extends JPanel {
         return lines;
     }
 
-    // --- DRAWING LOGIC ---
 
     @Override
     protected void paintComponent(Graphics g) {
@@ -354,7 +341,6 @@ public class StructuregramComponent extends JPanel {
         }
     }
 
-    // --- DATA STRUCTURES ---
 
     interface NsdBlock {
         Dimension calculateSize(Graphics2D g);

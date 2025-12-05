@@ -1,24 +1,33 @@
 plugins {
     id("java")
-    id("org.jetbrains.intellij") version "1.17.2"
+    // MIGRATION: Updated to the new 2.x plugin standard required for 2024.2+
+    id("org.jetbrains.intellij.platform") version "2.2.1"
 }
 
-// Group ID matching your plugin.xml
-group = "com.structuregram.simple"
-version = "3.0-SNAPSHOT"
+group = "com.example"
+version = "4.1-SNAPSHOT"
 
 repositories {
     mavenCentral()
+    // MIGRATION: New repository helper for 2.x
+    intellijPlatform {
+        defaultRepositories()
+    }
 }
 
-intellij {
+dependencies {
+    // MIGRATION: IDE and Plugin dependencies move here in 2.x
+    intellijPlatform {
+        // Target IDE Version (Stable 2024.3)
+        intellijIdeaCommunity("2024.3")
 
-    version.set("2024.2")
+        // Required for Java PSI (PsiMethod, PsiClass, etc.)
+        bundledPlugin("com.intellij.java")
 
-
-    type.set("IC")
-
-    plugins.set(listOf("com.intellij.java"))
+        // Essential tools for the build process
+        zipSigner()
+        pluginVerifier()
+    }
 }
 
 java {
@@ -27,14 +36,13 @@ java {
     }
 }
 
-tasks {
-    withType<JavaCompile> {
-        options.release.set(17)
-    }
-
-    patchPluginXml {
-        sinceBuild.set("232")
-
-        untilBuild.set(provider { null })
+// MIGRATION: Plugin metadata configuration
+intellijPlatform {
+    pluginConfiguration {
+        ideaVersion {
+            sinceBuild.set("243")
+            // Removes the upper build limit so it works on 2025.x
+            untilBuild.set(provider { null })
+        }
     }
 }
