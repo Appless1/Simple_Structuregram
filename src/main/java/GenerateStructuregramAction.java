@@ -17,8 +17,7 @@ import java.awt.*;
 
 public class GenerateStructuregramAction extends AnAction {
 
-    // CRITICAL FIX: Explicitly state that this action's update logic runs in the background.
-    // In 2023.3+, actions accessing PSI (like finding methods) must use BGT to avoid UI freezes.
+
     @Override
     public @NotNull ActionUpdateThread getActionUpdateThread() {
         return ActionUpdateThread.BGT;
@@ -30,29 +29,24 @@ public class GenerateStructuregramAction extends AnAction {
         Editor editor = e.getData(CommonDataKeys.EDITOR);
         PsiFile psiFile = e.getData(CommonDataKeys.PSI_FILE);
 
-        // 1. Safety Check
         if (project == null || editor == null || psiFile == null) {
             e.getPresentation().setEnabledAndVisible(false);
             return;
         }
 
-        // 2. File Type Check: Ensure it's a Java file
-        // Using getLanguage().isKindOf("JAVA") is safer than string comparison
+
         if (!psiFile.getLanguage().getID().equals("JAVA")) {
             e.getPresentation().setEnabledAndVisible(false);
             return;
         }
 
-        // 3. Make visible, but might be disabled
         e.getPresentation().setVisible(true);
 
-        // 4. Check if cursor is inside a method
         PsiMethod method = findMethod(editor, psiFile);
         boolean hasMethod = (method != null);
 
         e.getPresentation().setEnabled(hasMethod);
 
-        // 5. UX Update
         if (hasMethod) {
             e.getPresentation().setText("Generate Structuregram");
         } else {
@@ -86,10 +80,8 @@ public class GenerateStructuregramAction extends AnAction {
 
         if (element == null) return null;
 
-        // 1. Try direct parent (inside method body)
         PsiMethod method = PsiTreeUtil.getParentOfType(element, PsiMethod.class);
 
-        // 2. If null, might be selecting the whitespace around the method signature
         if (method == null) {
             PsiElement parent = element.getParent();
             if (parent != null) {
@@ -97,7 +89,6 @@ public class GenerateStructuregramAction extends AnAction {
             }
         }
 
-        // 3. Handle specific case of selecting the method identifier name
         if (method == null && element.getParent() instanceof PsiMethod) {
             method = (PsiMethod) element.getParent();
         }
