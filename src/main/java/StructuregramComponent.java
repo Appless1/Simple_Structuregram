@@ -1,4 +1,10 @@
+import com.intellij.openapi.editor.colors.EditorColorsManager;
+import com.intellij.openapi.editor.colors.EditorColorsScheme;
+import com.intellij.pom.Navigatable;
 import com.intellij.psi.*;
+import com.intellij.ui.JBColor;
+import com.intellij.util.ui.UIUtil;
+
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -6,16 +12,22 @@ import java.awt.geom.AffineTransform;
 import java.util.ArrayList;
 import java.util.List;
 
-
 public class StructuregramComponent extends JPanel {
+
+    public enum ThemeMode {
+        AUTO, DARK, LIGHT
+    }
 
     private final NsdBlock rootBlock;
     private static final int PADDING = 20;
-    private static final int LINE_HEIGHT = 20; // Base height per line of text
-    private static final int BLOCK_PADDING = 10; // Padding inside a block
+    private static final int LINE_HEIGHT = 20;
+    private static final int BLOCK_PADDING = 10;
     private static final int MIN_BLOCK_WIDTH = 250;
-    private static final Font FONT_BOLD = new Font("SansSerif", Font.BOLD, 12);
-    private static final Font FONT_PLAIN = new Font("SansSerif", Font.PLAIN, 12);
+
+    private ThemeMode currentThemeMode = ThemeMode.AUTO;
+
+    private Font fontBold;
+    private Font fontPlain;
 
     // Zooming state
     private double scaleFactor = 1.0;
@@ -29,34 +41,38 @@ public class StructuregramComponent extends JPanel {
 
     public StructuregramComponent(PsiMethod method) {
         this.rootBlock = parseMethod(method);
-        setBackground(Color.WHITE);
-        setFocusable(true); // Ensure we can receive inputs if needed
+        setOpaque(true);
+        setFocusable(true);
 
-        // Mouse Adapter for Panning (Middle Click) and Zooming
         MouseAdapter mouseAdapter = new MouseAdapter() {
             @Override
             public void mouseWheelMoved(MouseWheelEvent e) {
                 if (e.isControlDown()) {
+                    double oldScale = scaleFactor;
                     if (e.getWheelRotation() < 0) {
-                        scaleFactor *= 1.1; // Zoom In
+                        scaleFactor *= 1.1;
                     } else {
-                        scaleFactor /= 1.1; // Zoom Out
+                        scaleFactor /= 1.1;
                     }
-                    // Clamp scale
                     scaleFactor = Math.max(MIN_SCALE, Math.min(scaleFactor, MAX_SCALE));
+
+                    double scaleChange = scaleFactor / oldScale;
+                    translateX = e.getX() - (e.getX() - translateX) * scaleChange;
+                    translateY = e.getY() - (e.getY() - translateY) * scaleChange;
 
                     revalidate();
                     repaint();
                     e.consume();
                 } else {
-                    // Propagate to parent scroll pane if control is not held
                     getParent().dispatchEvent(e);
                 }
             }
 
             @Override
             public void mousePressed(MouseEvent e) {
-                if (SwingUtilities.isMiddleMouseButton(e)) {
+                if (e.isPopupTrigger()) {
+                    showContextMenu(e);
+                } else if (SwingUtilities.isMiddleMouseButton(e)) {
                     lastDragPoint = e.getPoint();
                     setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
                 }
@@ -64,7 +80,9 @@ public class StructuregramComponent extends JPanel {
 
             @Override
             public void mouseReleased(MouseEvent e) {
-                if (SwingUtilities.isMiddleMouseButton(e)) {
+                if (e.isPopupTrigger()) {
+                    showContextMenu(e);
+                } else if (SwingUtilities.isMiddleMouseButton(e)) {
                     lastDragPoint = null;
                     setCursor(Cursor.getDefaultCursor());
                 }
@@ -75,12 +93,17 @@ public class StructuregramComponent extends JPanel {
                 if (lastDragPoint != null && SwingUtilities.isMiddleMouseButton(e)) {
                     double dx = e.getX() - lastDragPoint.getX();
                     double dy = e.getY() - lastDragPoint.getY();
-
                     translateX += dx;
                     translateY += dy;
-
                     lastDragPoint = e.getPoint();
                     repaint();
+                }
+            }
+
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (SwingUtilities.isLeftMouseButton(e) && e.getClickCount() == 1) {
+                    handleNavigationClick(e.getX(), e.getY());
                 }
             }
         };
@@ -90,15 +113,68 @@ public class StructuregramComponent extends JPanel {
         addMouseMotionListener(mouseAdapter);
     }
 
+    private void showContextMenu(MouseEvent e) {
+        JPopupMenu menu = new JPopupMenu();
+
+        JMenuItem autoItem = new JMenuItem("Match Editor Theme");
+        autoItem.addActionListener(ev -> setThemeMode(ThemeMode.AUTO));
+        if (currentThemeMode == ThemeMode.AUTO) autoItem.setFont(autoItem.getFont().deriveFont(Font.BOLD));
+
+        JMenuItem darkItem = new JMenuItem("Force Dark Mode");
+        darkItem.addActionListener(ev -> setThemeMode(ThemeMode.DARK));
+        if (currentThemeMode == ThemeMode.DARK) darkItem.setFont(darkItem.getFont().deriveFont(Font.BOLD));
+
+        JMenuItem lightItem = new JMenuItem("Force Light Mode");
+        lightItem.addActionListener(ev -> setThemeMode(ThemeMode.LIGHT));
+        if (currentThemeMode == ThemeMode.LIGHT) lightItem.setFont(lightItem.getFont().deriveFont(Font.BOLD));
+
+        menu.add(autoItem);
+        menu.addSeparator();
+        menu.add(darkItem);
+        menu.add(lightItem);
+
+        menu.show(e.getComponent(), e.getX(), e.getY());
+    }
+
+    private void setThemeMode(ThemeMode mode) {
+        this.currentThemeMode = mode;
+        repaint();
+    }
+
+    private void handleNavigationClick(int screenX, int screenY) {
+        double logicalX = (screenX - translateX) / scaleFactor - PADDING;
+        double logicalY = (screenY - translateY) / scaleFactor - PADDING;
+
+        Graphics2D g2 = (Graphics2D) getGraphics();
+        if (g2 == null) return;
+
+        updateFonts();
+        g2.setFont(fontPlain);
+
+        Dimension rootDim = rootBlock.calculateSize(g2);
+        PsiElement target = rootBlock.getNavigatableAt(g2, (int)logicalX, (int)logicalY, rootDim.width);
+
+        if (target != null && target.isValid() && target instanceof Navigatable) {
+            ((Navigatable) target).navigate(true);
+        }
+    }
+
+    private void updateFonts() {
+        if (fontPlain == null || fontBold == null) {
+            Font labelFont = UIUtil.getLabelFont();
+            fontPlain = labelFont.deriveFont(Font.PLAIN, 12);
+            fontBold = labelFont.deriveFont(Font.BOLD, 12);
+        }
+    }
 
     private NsdBlock parseMethod(PsiMethod method) {
         PsiCodeBlock body = method.getBody();
-        if (body == null) return new SimpleBlock("Abstract/Native Method");
+        if (body == null) return new SimpleBlock(method, "Abstract/Native Method");
         return parseCodeBlock(body);
     }
 
     private NsdBlock parseCodeBlock(PsiCodeBlock block) {
-        ContainerBlock container = new ContainerBlock();
+        ContainerBlock container = new ContainerBlock(block);
         for (PsiStatement statement : block.getStatements()) {
             container.add(parseStatement(statement));
         }
@@ -109,34 +185,26 @@ public class StructuregramComponent extends JPanel {
         if (stmt instanceof PsiIfStatement) {
             PsiIfStatement ifStmt = (PsiIfStatement) stmt;
             String condition = ifStmt.getCondition() != null ? ifStmt.getCondition().getText() : "?";
-
             condition = naturalize(condition) + "?";
-
             NsdBlock thenBlock = parseBody(ifStmt.getThenBranch());
             NsdBlock elseBlock = parseBody(ifStmt.getElseBranch());
-
-            return new IfBlock(condition, thenBlock, elseBlock);
+            return new IfBlock(stmt, condition, thenBlock, elseBlock);
         }
         else if (stmt instanceof PsiSwitchStatement) {
             PsiSwitchStatement switchStmt = (PsiSwitchStatement) stmt;
             String expression = switchStmt.getExpression() != null ? switchStmt.getExpression().getText() : "?";
-
             List<SwitchBlock.CaseInfo> cases = new ArrayList<>();
             PsiCodeBlock body = switchStmt.getBody();
 
             if (body != null) {
                 String currentLabel = null;
                 ContainerBlock currentContainer = null;
-
                 for (PsiStatement s : body.getStatements()) {
                     if (s instanceof PsiSwitchLabelStatement) {
-                        // Finish previous case
                         if (currentLabel != null && currentContainer != null) {
                             cases.add(new SwitchBlock.CaseInfo(currentLabel, currentContainer));
                         }
-
-                        // Start new case
-                        currentContainer = new ContainerBlock();
+                        currentContainer = new ContainerBlock(s);
                         PsiSwitchLabelStatement label = (PsiSwitchLabelStatement) s;
                         if (label.isDefaultCase()) {
                             currentLabel = "Default";
@@ -145,49 +213,56 @@ public class StructuregramComponent extends JPanel {
                             currentLabel = (list != null) ? naturalize(list.getText()) : "Case";
                         }
                     } else {
-                        // Add statement to current case
-                        if (currentContainer != null) {
-                            currentContainer.add(parseStatement(s));
-                        } else if (currentLabel == null) {
+                        if (currentContainer != null) currentContainer.add(parseStatement(s));
+                        else if (currentLabel == null) {
                             currentLabel = "Start";
-                            currentContainer = new ContainerBlock();
+                            currentContainer = new ContainerBlock(s);
                             currentContainer.add(parseStatement(s));
                         }
                     }
                 }
-                // Add the last case
                 if (currentLabel != null && currentContainer != null) {
                     cases.add(new SwitchBlock.CaseInfo(currentLabel, currentContainer));
                 }
             }
-            return new SwitchBlock(naturalize(expression), cases);
+            return new SwitchBlock(stmt, naturalize(expression), cases);
         }
         else if (stmt instanceof PsiWhileStatement) {
             PsiWhileStatement loop = (PsiWhileStatement) stmt;
             String condition = loop.getCondition() != null ? loop.getCondition().getText() : "true";
-            return new LoopBlock("While " + naturalize(condition), parseBody(loop.getBody()));
+            return new LoopBlock(stmt, "While " + naturalize(condition), parseBody(loop.getBody()));
         }
         else if (stmt instanceof PsiDoWhileStatement) {
             PsiDoWhileStatement loop = (PsiDoWhileStatement) stmt;
             String condition = loop.getCondition() != null ? loop.getCondition().getText() : "true";
-            return new LoopBlock("Do ... Until " + naturalize(condition), parseBody(loop.getBody()));
+            return new LoopBlock(stmt, "Do ... Until " + naturalize(condition), parseBody(loop.getBody()));
         }
         else if (stmt instanceof PsiForStatement) {
             PsiForStatement loop = (PsiForStatement) stmt;
             String text = "Loop";
             PsiStatement init = loop.getInitialization();
             PsiExpression cond = loop.getCondition();
-
             if (init != null && cond != null) {
                 text = "For " + naturalize(init.getText()) + " to " + naturalize(cond.getText());
             }
-            return new LoopBlock(text, parseBody(loop.getBody()));
+            return new LoopBlock(stmt, text, parseBody(loop.getBody()));
         }
         else if (stmt instanceof PsiForeachStatement) {
             PsiForeachStatement loop = (PsiForeachStatement) stmt;
             String param = loop.getIterationParameter().getName();
             String value = loop.getIteratedValue() != null ? loop.getIteratedValue().getText() : "?";
-            return new LoopBlock("For each " + param + " in " + value, parseBody(loop.getBody()));
+            return new LoopBlock(stmt, "For each " + param + " in " + value, parseBody(loop.getBody()));
+        }
+        else if (stmt instanceof PsiTryStatement) {
+            PsiTryStatement tryStmt = (PsiTryStatement) stmt;
+            NsdBlock tryBlock = parseBody(tryStmt.getTryBlock());
+            List<TryCatchBlock.CatchInfo> catches = new ArrayList<>();
+            for (PsiCatchSection section : tryStmt.getCatchSections()) {
+                String type = section.getCatchType() != null ? section.getCatchType().getPresentableText() : "Exception";
+                catches.add(new TryCatchBlock.CatchInfo(type, parseBody(section.getCatchBlock())));
+            }
+            NsdBlock finallyBlock = tryStmt.getFinallyBlock() != null ? parseBody(tryStmt.getFinallyBlock()) : null;
+            return new TryCatchBlock(stmt, tryBlock, catches, finallyBlock);
         }
         else if (stmt instanceof PsiBlockStatement) {
             return parseCodeBlock(((PsiBlockStatement) stmt).getCodeBlock());
@@ -195,13 +270,13 @@ public class StructuregramComponent extends JPanel {
         else if (stmt instanceof PsiReturnStatement) {
             String retVal = ((PsiReturnStatement)stmt).getReturnValue() != null ?
                     ((PsiReturnStatement)stmt).getReturnValue().getText() : "";
-            return new SimpleBlock("Return " + naturalize(retVal));
+            return new SimpleBlock(stmt, "Return " + naturalize(retVal));
         }
         else if (stmt instanceof PsiBreakStatement) {
-            return new SimpleBlock("Break");
+            return new SimpleBlock(stmt, "Break");
         }
         else if (stmt instanceof PsiContinueStatement) {
-            return new SimpleBlock("Continue");
+            return new SimpleBlock(stmt, "Continue");
         }
         else if (stmt instanceof PsiDeclarationStatement) {
             PsiDeclarationStatement decl = (PsiDeclarationStatement) stmt;
@@ -215,19 +290,24 @@ public class StructuregramComponent extends JPanel {
                     }
                 }
             }
-            if (sb.length() == 0) return new SimpleBlock(naturalize(stmt.getText()));
-            return new SimpleBlock(sb.toString());
+            if (sb.length() == 0) return new SimpleBlock(stmt, naturalize(stmt.getText()));
+            return new SimpleBlock(stmt, sb.toString());
         }
 
-        return new SimpleBlock(naturalize(stmt.getText()));
+        return new SimpleBlock(stmt, naturalize(stmt.getText()));
     }
 
     private NsdBlock parseBody(PsiStatement body) {
-        if (body == null) return new SimpleBlock("");
+        if (body == null) return new SimpleBlock(null, "");
         if (body instanceof PsiBlockStatement) {
             return parseCodeBlock(((PsiBlockStatement) body).getCodeBlock());
         }
         return parseStatement(body);
+    }
+
+    private NsdBlock parseBody(PsiCodeBlock body) {
+        if (body == null) return new SimpleBlock(null, "");
+        return parseCodeBlock(body);
     }
 
     private String naturalize(String code) {
@@ -263,7 +343,7 @@ public class StructuregramComponent extends JPanel {
         return text.replaceAll("\\s+", " ").trim();
     }
 
-    private static List<String> wrapText(Graphics2D g, String text, int maxWidth, Font font) {
+    private List<String> wrapText(Graphics2D g, String text, int maxWidth, Font font) {
         List<String> lines = new ArrayList<>();
         if (text == null || text.isEmpty()) return lines;
 
@@ -284,22 +364,44 @@ public class StructuregramComponent extends JPanel {
         return lines;
     }
 
+    // New Helper to determine background based on mode
+    private Color getCurrentBackground() {
+        switch (currentThemeMode) {
+            case DARK: return new Color(43, 43, 43); // Standard Darcula Dark
+            case LIGHT: return Color.WHITE;
+            case AUTO: default:
+                return EditorColorsManager.getInstance().getGlobalScheme().getDefaultBackground();
+        }
+    }
+
+    // New Helper to determine foreground based on mode
+    private Color getCurrentForeground() {
+        switch (currentThemeMode) {
+            case DARK: return new Color(187, 187, 187); // Standard Darcula Text
+            case LIGHT: return Color.BLACK;
+            case AUTO: default:
+                return EditorColorsManager.getInstance().getGlobalScheme().getDefaultForeground();
+        }
+    }
 
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g;
 
-        // Setup rendering
+        // Use the helper methods for colors
+        g2.setColor(getCurrentBackground());
+        g2.fillRect(0, 0, getWidth(), getHeight());
+
+        updateFonts();
+
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
         g2.setStroke(new BasicStroke(1.2f));
 
         if (rootBlock != null) {
-            // 1. Calculate Logical (Unscaled) Size first
+            g2.setFont(fontPlain);
             Dimension logicalDim = rootBlock.calculateSize(g2);
-
-            // 2. Update Preferred Size based on Scale
             int scaledW = (int) ((logicalDim.width + PADDING * 2) * scaleFactor);
             int scaledH = (int) ((logicalDim.height + PADDING * 2) * scaleFactor);
 
@@ -309,24 +411,21 @@ public class StructuregramComponent extends JPanel {
                 revalidate();
             }
 
-            // 3. Apply Transformations (Pan then Zoom)
             AffineTransform oldTransform = g2.getTransform();
+            g2.translate(translateX, translateY);
+            g2.scale(scaleFactor, scaleFactor);
+            g2.translate(PADDING, PADDING);
 
-            g2.translate(translateX, translateY); // Apply Pan
-            g2.scale(scaleFactor, scaleFactor);   // Apply Zoom
-            g2.translate(PADDING, PADDING);       // Apply Base Padding
-
-            // 4. Draw
-            g2.setColor(Color.BLACK);
+            // Use the helper methods for colors
+            g2.setColor(getCurrentForeground());
             g2.drawRect(0, 0, logicalDim.width, logicalDim.height);
             rootBlock.draw(g2, 0, 0, logicalDim.width);
 
-            // 5. Restore Transform
             g2.setTransform(oldTransform);
         }
     }
 
-    private static void drawMultilineString(Graphics2D g, List<String> lines, int x, int y, int w, int h) {
+    private static void drawMultilineString(Graphics2D g, List<String> lines, int x, int y, int w, int h, boolean centered) {
         if (lines.isEmpty()) return;
         FontMetrics fm = g.getFontMetrics();
         int lineHeight = fm.getHeight();
@@ -335,7 +434,12 @@ public class StructuregramComponent extends JPanel {
         int startY = y + (h - totalTextHeight) / 2 + fm.getAscent();
 
         for (String line : lines) {
-            int textX = x + (w - fm.stringWidth(line)) / 2;
+            int textX;
+            if (centered) {
+                textX = x + (w - fm.stringWidth(line)) / 2;
+            } else {
+                textX = x + 5; // Left padding for standard blocks/loops
+            }
             g.drawString(line, textX, startY);
             startY += lineHeight;
         }
@@ -343,12 +447,26 @@ public class StructuregramComponent extends JPanel {
 
 
     interface NsdBlock {
+        PsiElement getElement();
         Dimension calculateSize(Graphics2D g);
         int draw(Graphics2D g, int x, int y, int width);
+        PsiElement getNavigatableAt(Graphics2D g, int x, int y, int width);
     }
 
-    static class ContainerBlock implements NsdBlock {
+    abstract class BaseBlock implements NsdBlock {
+        protected PsiElement element;
+        public BaseBlock(PsiElement element) { this.element = element; }
+        @Override public PsiElement getElement() { return element; }
+
+        protected boolean isPointInside(Graphics2D g, int x, int y, int w, int relX, int relY) {
+            Dimension size = calculateSize(g);
+            return relX >= x && relX <= x + w && relY >= y && relY <= y + size.height;
+        }
+    }
+
+    class ContainerBlock extends BaseBlock {
         List<NsdBlock> children = new ArrayList<>();
+        ContainerBlock(PsiElement element) { super(element); }
         void add(NsdBlock block) { children.add(block); }
 
         @Override
@@ -372,18 +490,31 @@ public class StructuregramComponent extends JPanel {
             }
             return currentY - y;
         }
+
+        @Override
+        public PsiElement getNavigatableAt(Graphics2D g, int x, int y, int width) {
+            if (!isPointInside(g, 0, 0, width, x, y)) return null;
+
+            int currentY = 0;
+            for (NsdBlock b : children) {
+                PsiElement found = b.getNavigatableAt(g, x, y - currentY, width);
+                if (found != null) return found;
+                currentY += b.calculateSize(g).height;
+            }
+            return null;
+        }
     }
 
-    static class SimpleBlock implements NsdBlock {
+    class SimpleBlock extends BaseBlock {
         String text;
-        SimpleBlock(String text) { this.text = text; }
+        SimpleBlock(PsiElement element, String text) { super(element); this.text = text; }
 
         @Override
         public Dimension calculateSize(Graphics2D g) {
-            int textWidth = g.getFontMetrics(FONT_PLAIN).stringWidth(text);
+            int textWidth = g.getFontMetrics(fontPlain).stringWidth(text);
             int width = Math.max(MIN_BLOCK_WIDTH, Math.min(textWidth + 20, 500));
-            List<String> lines = wrapText(g, text, width - 20, FONT_PLAIN);
-            int height = Math.max(LINE_HEIGHT, lines.size() * (g.getFontMetrics(FONT_PLAIN).getHeight() + 2) + BLOCK_PADDING);
+            List<String> lines = wrapText(g, text, width - 20, fontPlain);
+            int height = Math.max(LINE_HEIGHT, lines.size() * (g.getFontMetrics(fontPlain).getHeight() + 2) + BLOCK_PADDING);
             return new Dimension(width, height);
         }
 
@@ -391,23 +522,29 @@ public class StructuregramComponent extends JPanel {
         public int draw(Graphics2D g, int x, int y, int width) {
             Dimension size = calculateSize(g);
             int height = size.height;
-
-            g.setColor(Color.BLACK);
+            // Use instance method instead of static
+            g.setColor(getCurrentForeground());
             g.drawRect(x, y, width, height);
-            g.setFont(FONT_PLAIN);
-
-            List<String> lines = wrapText(g, text, width - 20, FONT_PLAIN);
-            drawMultilineString(g, lines, x, y, width, height);
-
+            g.setFont(fontPlain);
+            List<String> lines = wrapText(g, text, width - 20, fontPlain);
+            // Left-aligned text for standard blocks
+            drawMultilineString(g, lines, x, y, width, height, false);
             return height;
+        }
+
+        @Override
+        public PsiElement getNavigatableAt(Graphics2D g, int x, int y, int width) {
+            if (isPointInside(g, 0, 0, width, x, y)) return element;
+            return null;
         }
     }
 
-    static class IfBlock implements NsdBlock {
+    class IfBlock extends BaseBlock {
         String condition;
         NsdBlock thenBlock, elseBlock;
 
-        IfBlock(String condition, NsdBlock thenBlock, NsdBlock elseBlock) {
+        IfBlock(PsiElement element, String condition, NsdBlock thenBlock, NsdBlock elseBlock) {
+            super(element);
             this.condition = condition;
             this.thenBlock = thenBlock;
             this.elseBlock = elseBlock;
@@ -428,19 +565,16 @@ public class StructuregramComponent extends JPanel {
             int elseH = elseBlock.calculateSize(g).height;
             int contentH = Math.max(thenH, elseH);
 
-            g.setColor(Color.BLACK);
+            g.setColor(getCurrentForeground());
             g.drawRect(x, y, width, headerH);
-
             int midX = x + (width / 2);
             int bottomY = y + headerH;
-
             g.drawLine(x, y, midX, bottomY);
             g.drawLine(x + width, y, midX, bottomY);
-
-            g.setFont(FONT_BOLD);
-            drawMultilineString(g, wrapText(g, condition, width/2, FONT_BOLD), x, y, width, headerH/2 + 5);
-
-            g.setFont(FONT_PLAIN);
+            g.setFont(fontBold);
+            // Diamond conditions are centered
+            drawMultilineString(g, wrapText(g, condition, width/2, fontBold), x, y, width, headerH/2 + 5, true);
+            g.setFont(fontPlain);
             g.drawString("True", x + 5, bottomY - 5);
             g.drawString("False", x + width - 35, bottomY - 5);
 
@@ -449,16 +583,31 @@ public class StructuregramComponent extends JPanel {
 
             g.drawRect(x, bottomY, width / 2, contentH);
             g.drawRect(midX, bottomY, width / 2, contentH);
-
             return headerH + contentH;
+        }
+
+        @Override
+        public PsiElement getNavigatableAt(Graphics2D g, int x, int y, int width) {
+            if (!isPointInside(g, 0, 0, width, x, y)) return null;
+
+            int headerH = (int)(LINE_HEIGHT * 2.5);
+            if (y < headerH) return element;
+
+            int midX = width / 2;
+            if (x < midX) {
+                return thenBlock.getNavigatableAt(g, x, y - headerH, midX);
+            } else {
+                return elseBlock.getNavigatableAt(g, x - midX, y - headerH, midX);
+            }
         }
     }
 
-    static class LoopBlock implements NsdBlock {
+    class LoopBlock extends BaseBlock {
         String condition;
         NsdBlock body;
 
-        LoopBlock(String condition, NsdBlock body) {
+        LoopBlock(PsiElement element, String condition, NsdBlock body) {
+            super(element);
             this.condition = condition;
             this.body = body;
         }
@@ -466,39 +615,84 @@ public class StructuregramComponent extends JPanel {
         @Override
         public Dimension calculateSize(Graphics2D g) {
             Dimension b = body.calculateSize(g);
-            return new Dimension(b.width + 40, b.height + LINE_HEIGHT + 10);
+            int barWidth = 30;
+            // Header must be at least wide enough for content + bar
+            int contentWidth = Math.max(b.width + barWidth, MIN_BLOCK_WIDTH);
+
+            // Dynamic header height based on text wrapping
+            List<String> lines = wrapText(g, condition, contentWidth - 10, fontBold);
+            int headerHeight = Math.max(LINE_HEIGHT + 10, lines.size() * g.getFontMetrics(fontBold).getHeight() + 10);
+
+            return new Dimension(contentWidth, b.height + headerHeight);
         }
 
         @Override
         public int draw(Graphics2D g, int x, int y, int width) {
             int barWidth = 30;
-            int headerHeight = LINE_HEIGHT + 10;
+
+            // Recalculate dynamic height for drawing context
+            List<String> lines = wrapText(g, condition, width - 10, fontBold);
+            int headerHeight = Math.max(LINE_HEIGHT + 10, lines.size() * g.getFontMetrics(fontBold).getHeight() + 10);
+
             int bodyHeight = body.calculateSize(g).height;
             int totalHeight = bodyHeight + headerHeight;
 
-            g.setColor(Color.BLACK);
-            g.drawRect(x, y, width, headerHeight);
-            g.setFont(FONT_BOLD);
-            drawMultilineString(g, wrapText(g, condition, width - 10, FONT_BOLD), x, y, width, headerHeight);
+            g.setColor(getCurrentForeground());
 
-            g.drawRect(x, y + headerHeight, barWidth, bodyHeight);
+            // Draw Continuous L-Shape Frame manually (no rects to avoid internal lines)
+            // 1. Top Edge
+            g.drawLine(x, y, x + width, y);
+            // 2. Left Edge (Full Height - continuous)
+            g.drawLine(x, y, x, y + totalHeight);
+            // 3. Right Edge (Header part only)
+            g.drawLine(x + width, y, x + width, y + headerHeight);
+            // 4. Sidebar Bottom Edge
+            g.drawLine(x, y + totalHeight, x + barWidth, y + totalHeight);
+            // 5. Divider Horizontal (Header / Body)
+            g.drawLine(x + barWidth, y + headerHeight, x + width, y + headerHeight);
+            // 6. Divider Vertical (Sidebar / Body)
+            g.drawLine(x + barWidth, y + headerHeight, x + barWidth, y + totalHeight);
+
+            // Note: We deliberately skip the horizontal line segment from x to x+barWidth
+            // at y+headerHeight to make the "L" shape continuous.
+
+            g.setFont(fontBold);
+            // Loop conditions are left-aligned
+            drawMultilineString(g, lines, x, y, width, headerHeight, false);
+
+            // Draw body offset by bar width
             body.draw(g, x + barWidth, y + headerHeight, width - barWidth);
-
             return totalHeight;
+        }
+
+        @Override
+        public PsiElement getNavigatableAt(Graphics2D g, int x, int y, int width) {
+            if (!isPointInside(g, 0, 0, width, x, y)) return null;
+
+            List<String> lines = wrapText(g, condition, width - 10, fontBold);
+            int headerHeight = Math.max(LINE_HEIGHT + 10, lines.size() * g.getFontMetrics(fontBold).getHeight() + 10);
+
+            if (y < headerHeight) return element; // Clicked Header
+
+            int barWidth = 30;
+            if (x < barWidth) return element; // Clicked Sidebar
+
+            return body.getNavigatableAt(g, x - barWidth, y - headerHeight, width - barWidth);
         }
     }
 
-    static class SwitchBlock implements NsdBlock {
+    class SwitchBlock extends BaseBlock {
         static class CaseInfo {
             String label;
-            NsdBlock block;
-            CaseInfo(String label, NsdBlock block) { this.label = label; this.block = block; }
+            ContainerBlock block;
+            CaseInfo(String label, ContainerBlock block) { this.label = label; this.block = block; }
         }
 
         String expression;
         List<CaseInfo> cases;
 
-        SwitchBlock(String expression, List<CaseInfo> cases) {
+        SwitchBlock(PsiElement element, String expression, List<CaseInfo> cases) {
+            super(element);
             this.expression = expression;
             this.cases = cases;
         }
@@ -521,11 +715,10 @@ public class StructuregramComponent extends JPanel {
             int headerH = (int)(LINE_HEIGHT * 2.5);
             int contentTop = y + headerH;
 
-            // Draw Header (Switch Condition)
-            g.setColor(Color.BLACK);
+            g.setColor(getCurrentForeground());
             g.drawRect(x, y, width, headerH);
-            g.setFont(FONT_BOLD);
-            drawMultilineString(g, wrapText(g, "Switch: " + expression, width, FONT_BOLD), x, y + 5, width, headerH/2);
+            g.setFont(fontBold);
+            drawMultilineString(g, wrapText(g, "Switch: " + expression, width, fontBold), x, y + 5, width, headerH/2, true);
 
             if (cases.isEmpty()) return headerH;
 
@@ -533,40 +726,223 @@ public class StructuregramComponent extends JPanel {
             int remainingWidth = width;
             int totalRequiredWidth = 0;
             for(CaseInfo c : cases) totalRequiredWidth += c.block.calculateSize(g).width;
-
             int maxContentH = 0;
             for(CaseInfo c : cases) maxContentH = Math.max(maxContentH, c.block.calculateSize(g).height);
 
-            // Draw each case column
             for (int i = 0; i < cases.size(); i++) {
                 CaseInfo c = cases.get(i);
-
-                // Proportional width allocation
                 int colWidth;
                 if (i == cases.size() - 1) {
-                    colWidth = remainingWidth; // Last one takes remainder to avoid gaps
+                    colWidth = remainingWidth;
                 } else {
                     double ratio = (double) c.block.calculateSize(g).width / totalRequiredWidth;
                     colWidth = (int) (width * ratio);
-                    if (colWidth < 50) colWidth = 50; // Min width safety
+                    if (colWidth < 50) colWidth = 50;
+                }
+                remainingWidth -= colWidth;
+                g.drawRect(currentX, contentTop - (headerH/2), colWidth, headerH/2);
+                g.setFont(fontPlain);
+                g.drawString(c.label, currentX + 5, contentTop - 5);
+                c.block.draw(g, currentX, contentTop, colWidth);
+                g.drawRect(currentX, contentTop, colWidth, maxContentH);
+                currentX += colWidth;
+            }
+            return headerH + maxContentH;
+        }
+
+        @Override
+        public PsiElement getNavigatableAt(Graphics2D g, int x, int y, int width) {
+            if (!isPointInside(g, 0, 0, width, x, y)) return null;
+
+            int headerH = (int)(LINE_HEIGHT * 2.5);
+            if (y < headerH) return element;
+
+            if (cases.isEmpty()) return null;
+
+            int currentX = 0;
+            int remainingWidth = width;
+            int totalRequiredWidth = 0;
+            for(CaseInfo c : cases) totalRequiredWidth += c.block.calculateSize(g).width;
+
+            for (int i = 0; i < cases.size(); i++) {
+                CaseInfo c = cases.get(i);
+                int colWidth;
+                if (i == cases.size() - 1) {
+                    colWidth = remainingWidth;
+                } else {
+                    double ratio = (double) c.block.calculateSize(g).width / totalRequiredWidth;
+                    colWidth = (int) (width * ratio);
+                    if (colWidth < 50) colWidth = 50;
                 }
                 remainingWidth -= colWidth;
 
-                // Draw Label Area (Diagonal split is complex, using sub-header)
-                g.drawRect(currentX, contentTop - (headerH/2), colWidth, headerH/2);
-                g.setFont(FONT_PLAIN);
-                g.drawString(c.label, currentX + 5, contentTop - 5);
-
-                // Draw Case Block
-                c.block.draw(g, currentX, contentTop, colWidth);
-
-                // Draw outline for case column to ensure full height matching
-                g.drawRect(currentX, contentTop, colWidth, maxContentH);
-
+                if (x >= currentX && x < currentX + colWidth) {
+                    return c.block.getNavigatableAt(g, x - currentX, y - headerH, colWidth);
+                }
                 currentX += colWidth;
             }
+            return null;
+        }
+    }
 
-            return headerH + maxContentH;
+    class TryCatchBlock extends BaseBlock {
+        static class CatchInfo {
+            String type;
+            NsdBlock block;
+            CatchInfo(String type, NsdBlock block) { this.type = type; this.block = block; }
+        }
+
+        NsdBlock tryBlock;
+        List<CatchInfo> catches;
+        NsdBlock finallyBlock;
+
+        TryCatchBlock(PsiElement element, NsdBlock tryBlock, List<CatchInfo> catches, NsdBlock finallyBlock) {
+            super(element);
+            this.tryBlock = tryBlock;
+            this.catches = catches;
+            this.finallyBlock = finallyBlock;
+        }
+
+        @Override
+        public Dimension calculateSize(Graphics2D g) {
+            Dimension t = tryBlock.calculateSize(g);
+            int w = t.width;
+            int h = t.height + LINE_HEIGHT;
+
+            if (!catches.isEmpty()) {
+                int cW = 0;
+                int cH = 0;
+                for (CatchInfo c : catches) {
+                    Dimension d = c.block.calculateSize(g);
+                    cW += d.width;
+                    cH = Math.max(cH, d.height);
+                }
+                w = Math.max(w, cW);
+                h += cH + LINE_HEIGHT;
+            }
+
+            if (finallyBlock != null) {
+                Dimension f = finallyBlock.calculateSize(g);
+                w = Math.max(w, f.width);
+                h += f.height + LINE_HEIGHT;
+            }
+            return new Dimension(Math.max(w, MIN_BLOCK_WIDTH), h);
+        }
+
+        @Override
+        public int draw(Graphics2D g, int x, int y, int width) {
+            int currentY = y;
+
+            g.setColor(getCurrentForeground());
+            g.drawRect(x, currentY, width, LINE_HEIGHT);
+            g.setFont(fontBold);
+            g.drawString("Try", x + 5, currentY + 15);
+            currentY += LINE_HEIGHT;
+
+            int tryH = tryBlock.draw(g, x, currentY, width);
+            currentY += tryH;
+
+            if (!catches.isEmpty()) {
+                g.drawRect(x, currentY, width, LINE_HEIGHT);
+                currentY += LINE_HEIGHT;
+
+                int catchTop = currentY;
+                int remainingWidth = width;
+                int totalRequiredWidth = 0;
+                for (CatchInfo c : catches) totalRequiredWidth += c.block.calculateSize(g).width;
+
+                int maxH = 0;
+                for (CatchInfo c : catches) maxH = Math.max(maxH, c.block.calculateSize(g).height);
+
+                int curX = x;
+                for (int i = 0; i < catches.size(); i++) {
+                    CatchInfo c = catches.get(i);
+                    int colWidth;
+                    if (i == catches.size() - 1) colWidth = remainingWidth;
+                    else {
+                        double ratio = (double) c.block.calculateSize(g).width / totalRequiredWidth;
+                        colWidth = (int) (width * ratio);
+                        if (colWidth < 50) colWidth = 50;
+                    }
+                    remainingWidth -= colWidth;
+
+                    g.setFont(fontPlain);
+                    g.drawString("Catch " + c.type, curX + 5, catchTop - 5);
+                    g.drawLine(curX, catchTop - LINE_HEIGHT, curX, catchTop + maxH);
+
+                    c.block.draw(g, curX, catchTop, colWidth);
+                    curX += colWidth;
+                }
+                g.drawRect(x, catchTop, width, maxH);
+                currentY += maxH;
+            }
+
+            if (finallyBlock != null) {
+                g.drawRect(x, currentY, width, LINE_HEIGHT);
+                g.setFont(fontBold);
+                g.drawString("Finally", x + 5, currentY + 15);
+                currentY += LINE_HEIGHT;
+                int finH = finallyBlock.draw(g, x, currentY, width);
+                currentY += finH;
+            }
+
+            return currentY - y;
+        }
+
+        @Override
+        public PsiElement getNavigatableAt(Graphics2D g, int x, int y, int width) {
+            if (!isPointInside(g, 0, 0, width, x, y)) return null;
+
+            int currentY = 0;
+            if (y < LINE_HEIGHT) return element;
+            currentY += LINE_HEIGHT;
+
+            int tryH = tryBlock.calculateSize(g).height;
+            if (y < currentY + tryH) return tryBlock.getNavigatableAt(g, x, y - currentY, width);
+            currentY += tryH;
+
+            if (!catches.isEmpty()) {
+                if (y < currentY + LINE_HEIGHT) return element;
+                currentY += LINE_HEIGHT;
+
+                int maxH = 0;
+                int totalRequiredWidth = 0;
+                for (CatchInfo c : catches) {
+                    Dimension d = c.block.calculateSize(g);
+                    maxH = Math.max(maxH, d.height);
+                    totalRequiredWidth += d.width;
+                }
+
+                if (y < currentY + maxH) {
+                    int relX = x;
+                    int remainingW = width;
+                    for (int i = 0; i < catches.size(); i++) {
+                        CatchInfo c = catches.get(i);
+                        int colWidth;
+                        if (i == catches.size() - 1) colWidth = remainingW;
+                        else {
+                            double ratio = (double) c.block.calculateSize(g).width / totalRequiredWidth;
+                            colWidth = (int) (width * ratio);
+                            if (colWidth < 50) colWidth = 50;
+                        }
+                        remainingW -= colWidth;
+
+                        if (relX < colWidth) {
+                            return c.block.getNavigatableAt(g, relX, y - currentY, colWidth);
+                        }
+                        relX -= colWidth;
+                    }
+                }
+                currentY += maxH;
+            }
+
+            if (finallyBlock != null) {
+                if (y < currentY + LINE_HEIGHT) return element;
+                currentY += LINE_HEIGHT;
+                return finallyBlock.getNavigatableAt(g, x, y - currentY, width);
+            }
+
+            return null;
         }
     }
 }
