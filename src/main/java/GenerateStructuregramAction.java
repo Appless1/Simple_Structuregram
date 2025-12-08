@@ -100,11 +100,11 @@ public class GenerateStructuregramAction extends AnAction {
         private final PsiMethod method;
 
         protected StructuregramDialog(PsiMethod method) {
-            super(method.getProject()); // Use project context for better dialog handling
+            super(method.getProject());
             this.method = method;
             init();
             setTitle("Structuregram: " + method.getName());
-            setModal(false); // allow interaction with code while viewing
+            setModal(false);
         }
 
         @Nullable
@@ -114,7 +114,6 @@ public class GenerateStructuregramAction extends AnAction {
             JScrollPane scrollPane = new JScrollPane(viewer);
             scrollPane.setPreferredSize(new Dimension(800, 600));
 
-            // Speed up scrolling for large diagrams
             scrollPane.getVerticalScrollBar().setUnitIncrement(16);
             scrollPane.getHorizontalScrollBar().setUnitIncrement(16);
 
