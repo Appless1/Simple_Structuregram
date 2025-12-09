@@ -1,5 +1,4 @@
 <idea-plugin>
-    <!-- CHANGED: 'com.example' is forbidden, so we use a different ID -->
     <id>com.structuregram.simple.id</id>
     <name>Simple Structuregram</name>
     <vendor email="user@localhost" url="https://www.localhost.com">Local User</vendor>
@@ -10,16 +9,13 @@
     Usage: Highlight a method name or body, Right Click -> Generate Structuregram.
     ]]></description>
 
-    <!-- We depend on the Java module to parse Java code -->
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <!-- Add any extensions here -->
     </extensions>
 
     <actions>
-        <!-- Registers the action in the Editor Popup Menu (Right Click) -->
         <action id="com.structuregram.simple.GenerateStructuregramAction"
                 class="GenerateStructuregramAction"
                 text="Generate Structuregram"
